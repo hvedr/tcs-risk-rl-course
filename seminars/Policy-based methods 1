@@ -1,0 +1,1539 @@
+{
+ "cells": [
+  {
+   "cell_type": "code",
+   "execution_count": 1,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "import torch, torch.nn as nn\n",
+    "from torch.functional import F as F\n",
+    "import gym\n",
+    "import numpy as np\n",
+    "import matplotlib.pyplot as plt\n",
+    "from tqdm import tqdm_notebook as tqdm"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": []
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 2,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "device = torch.device('cpu')"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 3,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "def ma(X, n):\n",
+    "    return np.convolve(X, np.ones((n,)) / n, mode='valid')\n",
+    "\n",
+    "def ms(X, n):\n",
+    "    return np.convolve(X, np.ones((n,)), mode='valid')\n",
+    "\n",
+    "def softmax(arr):\n",
+    "    return np.exp(arr) / np.sum(np.exp(arr))"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": []
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": []
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "## Reinforce"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 619,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "class PG(nn.Module):\n",
+    "    def __init__(self):\n",
+    "        super(PG,self).__init__()\n",
+    "        \n",
+    "        self.actoin_space = env.action_space.n\n",
+    "        self.observation_space = env.observation_space.shape[0]\n",
+    "        \n",
+    "        self.main = nn.Sequential(\n",
+    "            nn.Linear(self.observation_space, 64),\n",
+    "            nn.ReLU(),\n",
+    "            nn.Linear(64, 64),\n",
+    "            nn.ReLU(),\n",
+    "            nn.Linear(64, self.actoin_space)\n",
+    "        )\n",
+    "        \n",
+    "    \n",
+    "    def forward(self, inp):\n",
+    "        return F.softmax(self.main(inp).view(-1), dim=0)"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 625,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "GAMMA = 0.99\n",
+    "\n",
+    "class ReplayBuffer():\n",
+    "    def __init__(self, size = 100):\n",
+    "        \n",
+    "        self.size = size\n",
+    "        self.actoin_space = env.action_space.n\n",
+    "        self.observation_space = env.observation_space.shape[0]\n",
+    "        \n",
+    "        self.states = []\n",
+    "        self.probs = []\n",
+    "        self.rewards = []\n",
+    "        \n",
+    "        self.eps = torch.tensor(1e-8).to(device)\n",
+    "        \n",
+    "        self.begin_episode()\n",
+    "        \n",
+    "    def begin_episode(self):\n",
+    "        self.probs = []\n",
+    "        self.rewards = []\n",
+    "        \n",
+    "    def add_obs(self, a, s, r, d):\n",
+    "        \n",
+    "        self.probs += [a]\n",
+    "        self.rewards += [r]\n",
+    "        \n",
+    "    def sample(self):\n",
+    "        \n",
+    "        returns = [np.dot( GAMMA**np.arange(1,len(self.rewards)-i+1), self.rewards[i:] ) for i in range(len(self.rewards))]\n",
+    "        returns = torch.tensor(returns).to(device)\n",
+    "        returns = (returns - returns.mean()) / (returns.std() + self.eps)\n",
+    "        probs = torch.cat(self.probs).view(-1).to(device)\n",
+    "        self.begin_episode()\n",
+    "        \n",
+    "        return probs, returns\n",
+    "\n",
+    "class Agent():\n",
+    "    def __init__(self, rb):\n",
+    "        self.policy_model = PG().to(device)\n",
+    "        self.replay = rb\n",
+    "        self.optimizer = torch.optim.Adam(\n",
+    "            self.policy_model.parameters(), lr=1e-3,\n",
+    "        )\n",
+    "    \n",
+    "    def train_step(self, log_probs, returns):\n",
+    "        \n",
+    "        loss = (-log_probs * returns).sum()\n",
+    "        \n",
+    "        self.optimizer.zero_grad()\n",
+    "        loss.backward()\n",
+    "        self.optimizer.step()\n",
+    "        \n",
+    "        return loss.item()\n",
+    "    \n",
+    "    def train_iter(self):\n",
+    "        \n",
+    "        log_probs, returns = self.replay.sample()\n",
+    "        \n",
+    "        losses = 0\n",
+    "        losses += self.train_step(log_probs, returns)\n",
+    "            \n",
+    "        return losses / 1.0\n",
+    "    \n",
+    "    def select(self, state):\n",
+    "        \n",
+    "        t_state = torch.tensor(state).float().unsqueeze(0).to(device)\n",
+    "        act_probs = self.policy_model(t_state).cpu()\n",
+    "        act_distr = torch.distributions.Categorical(act_probs)\n",
+    "        act = act_distr.sample()\n",
+    "        log_probs = act_distr.log_prob(act).view(1,-1)\n",
+    "        \n",
+    "        return act.item(), log_probs\n",
+    "        \n",
+    "        "
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 626,
+   "metadata": {
+    "scrolled": true
+   },
+   "outputs": [
+    {
+     "data": {
+      "application/vnd.jupyter.widget-view+json": {
+       "model_id": "5347bc2e8efd4a098eec271add621948",
+       "version_major": 2,
+       "version_minor": 0
+      },
+      "text/plain": [
+       "HBox(children=(IntProgress(value=0, max=1000), HTML(value='')))"
+      ]
+     },
+     "metadata": {},
+     "output_type": "display_data"
+    },
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "Episiode 0, episode reward 26.0, total reward 26.0 loss: 0.06361305713653564\n",
+      "Episiode 10, episode reward 16.0, total reward 22.0 loss: -0.09756278991699219\n",
+      "Episiode 20, episode reward 40.0, total reward 25.14 loss: -0.08643960952758789\n",
+      "Episiode 30, episode reward 74.0, total reward 25.94 loss: -0.596818208694458\n",
+      "Episiode 40, episode reward 12.0, total reward 24.17 loss: -0.09997892379760742\n",
+      "Episiode 50, episode reward 12.0, total reward 24.39 loss: -0.22132793068885803\n",
+      "Episiode 60, episode reward 46.0, total reward 24.89 loss: -0.34902799129486084\n",
+      "Episiode 70, episode reward 9.0, total reward 24.99 loss: 0.6877330541610718\n",
+      "Episiode 80, episode reward 18.0, total reward 25.49 loss: 0.27440834045410156\n",
+      "Episiode 90, episode reward 39.0, total reward 25.4 loss: -1.036149024963379\n",
+      "Episiode 100, episode reward 51.0, total reward 25.79 loss: 0.25546085834503174\n",
+      "Episiode 110, episode reward 34.0, total reward 26.42 loss: -0.8362631797790527\n",
+      "Episiode 120, episode reward 11.0, total reward 26.5 loss: 1.0479323863983154\n",
+      "Episiode 130, episode reward 39.0, total reward 27.46 loss: 0.575397253036499\n",
+      "Episiode 140, episode reward 53.0, total reward 28.87 loss: -4.439245223999023\n",
+      "Episiode 150, episode reward 85.0, total reward 31.09 loss: 1.057281255722046\n",
+      "Episiode 160, episode reward 79.0, total reward 32.92 loss: 1.9830995798110962\n",
+      "Episiode 170, episode reward 75.0, total reward 33.94 loss: 1.7215054035186768\n",
+      "Episiode 180, episode reward 13.0, total reward 35.01 loss: 0.7860877513885498\n",
+      "Episiode 190, episode reward 111.0, total reward 37.26 loss: -0.07460188865661621\n",
+      "Episiode 200, episode reward 131.0, total reward 41.06 loss: -1.1980161666870117\n",
+      "Episiode 210, episode reward 94.0, total reward 44.0 loss: -1.7773380279541016\n",
+      "Episiode 220, episode reward 248.0, total reward 47.22 loss: -7.358181476593018\n",
+      "Episiode 230, episode reward 244.0, total reward 54.79 loss: 2.9077274799346924\n",
+      "Episiode 240, episode reward 120.0, total reward 63.13 loss: -7.7176384925842285\n",
+      "Episiode 250, episode reward 299.0, total reward 70.25 loss: -0.005037784576416016\n",
+      "Episiode 260, episode reward 447.0, total reward 83.63 loss: -4.910917282104492\n",
+      "Episiode 270, episode reward 154.0, total reward 89.29 loss: -3.520655632019043\n",
+      "Episiode 280, episode reward 166.0, total reward 92.24 loss: 2.0797505378723145\n",
+      "Episiode 290, episode reward 133.0, total reward 94.55 loss: -0.6375942230224609\n",
+      "Episiode 300, episode reward 243.0, total reward 96.5 loss: 1.4874703884124756\n",
+      "Episiode 310, episode reward 500.0, total reward 104.58 loss: 0.15334105491638184\n",
+      "Episiode 320, episode reward 233.0, total reward 115.15 loss: 0.9302754402160645\n",
+      "Episiode 330, episode reward 144.0, total reward 119.19 loss: -4.403466701507568\n",
+      "Episiode 340, episode reward 397.0, total reward 122.33 loss: -3.3967082500457764\n",
+      "Episiode 350, episode reward 240.0, total reward 126.19 loss: -4.538181304931641\n",
+      "Episiode 360, episode reward 252.0, total reward 129.41 loss: 0.7080416679382324\n",
+      "Episiode 370, episode reward 108.0, total reward 129.11 loss: -3.75915789604187\n",
+      "Episiode 380, episode reward 189.0, total reward 129.14 loss: -2.355024814605713\n",
+      "Episiode 390, episode reward 263.0, total reward 132.79 loss: -1.9888832569122314\n",
+      "Episiode 400, episode reward 421.0, total reward 138.77 loss: -10.487602233886719\n",
+      "Episiode 410, episode reward 314.0, total reward 145.02 loss: 0.9780306816101074\n",
+      "Episiode 420, episode reward 500.0, total reward 152.15 loss: -10.078582763671875\n",
+      "Episiode 430, episode reward 270.0, total reward 156.99 loss: -6.206679344177246\n",
+      "Episiode 440, episode reward 500.0, total reward 163.33 loss: -8.768430709838867\n",
+      "Episiode 450, episode reward 500.0, total reward 170.25 loss: 1.4977035522460938\n",
+      "Episiode 460, episode reward 500.0, total reward 174.29 loss: -15.506694793701172\n",
+      "Episiode 470, episode reward 304.0, total reward 178.53 loss: -1.2974448204040527\n",
+      "Episiode 480, episode reward 500.0, total reward 181.6 loss: 4.962793350219727\n",
+      "Episiode 490, episode reward 500.0, total reward 186.37 loss: -0.21974706649780273\n",
+      "Episiode 500, episode reward 500.0, total reward 191.66 loss: 5.191245079040527\n",
+      "Episiode 510, episode reward 500.0, total reward 197.61 loss: -5.202574253082275\n",
+      "Episiode 520, episode reward 500.0, total reward 203.39 loss: 3.981288433074951\n",
+      "Episiode 530, episode reward 500.0, total reward 208.37 loss: 11.940595626831055\n",
+      "Episiode 540, episode reward 500.0, total reward 213.76 loss: -8.722902297973633\n",
+      "Episiode 550, episode reward 500.0, total reward 218.95 loss: -2.872039318084717\n",
+      "Episiode 560, episode reward 500.0, total reward 223.96 loss: -7.704751968383789\n",
+      "Episiode 570, episode reward 500.0, total reward 228.33 loss: 0.5253057479858398\n",
+      "Episiode 580, episode reward 500.0, total reward 233.0 loss: -5.004241466522217\n",
+      "Episiode 590, episode reward 467.0, total reward 236.8 loss: -1.5660934448242188\n",
+      "Episiode 600, episode reward 500.0, total reward 241.18 loss: -8.663640975952148\n",
+      "Episiode 610, episode reward 500.0, total reward 244.84 loss: 0.29345703125\n",
+      "Episiode 620, episode reward 500.0, total reward 248.6 loss: -0.4567091464996338\n",
+      "Episiode 630, episode reward 500.0, total reward 251.68 loss: 11.029340744018555\n"
+     ]
+    },
+    {
+     "ename": "KeyboardInterrupt",
+     "evalue": "",
+     "output_type": "error",
+     "traceback": [
+      "\u001b[0;31m---------------------------------------------------------------------------\u001b[0m",
+      "\u001b[0;31mKeyboardInterrupt\u001b[0m                         Traceback (most recent call last)",
+      "\u001b[0;32m<ipython-input-626-f480be65a8d5>\u001b[0m in \u001b[0;36m<module>\u001b[0;34m\u001b[0m\n\u001b[1;32m     21\u001b[0m         \u001b[0mbuffer\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0madd_obs\u001b[0m\u001b[0;34m(\u001b[0m \u001b[0mprobs\u001b[0m\u001b[0;34m,\u001b[0m \u001b[0ms_\u001b[0m\u001b[0;34m,\u001b[0m \u001b[0mr\u001b[0m\u001b[0;34m,\u001b[0m \u001b[0mdone\u001b[0m \u001b[0;34m)\u001b[0m\u001b[0;34m\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[1;32m     22\u001b[0m \u001b[0;34m\u001b[0m\u001b[0m\n\u001b[0;32m---> 23\u001b[0;31m         \u001b[0ma\u001b[0m\u001b[0;34m,\u001b[0m \u001b[0mprobs\u001b[0m \u001b[0;34m=\u001b[0m \u001b[0magent\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0mselect\u001b[0m\u001b[0;34m(\u001b[0m\u001b[0;34m[\u001b[0m\u001b[0ms_\u001b[0m\u001b[0;34m]\u001b[0m\u001b[0;34m)\u001b[0m\u001b[0;34m\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[0m\u001b[1;32m     24\u001b[0m \u001b[0;34m\u001b[0m\u001b[0m\n\u001b[1;32m     25\u001b[0m         \u001b[0;32mif\u001b[0m \u001b[0mdone\u001b[0m\u001b[0;34m:\u001b[0m\u001b[0;34m\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n",
+      "\u001b[0;32m<ipython-input-625-5517110b405e>\u001b[0m in \u001b[0;36mselect\u001b[0;34m(self, state)\u001b[0m\n\u001b[1;32m     65\u001b[0m \u001b[0;34m\u001b[0m\u001b[0m\n\u001b[1;32m     66\u001b[0m         \u001b[0mt_state\u001b[0m \u001b[0;34m=\u001b[0m \u001b[0mtorch\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0mtensor\u001b[0m\u001b[0;34m(\u001b[0m\u001b[0mstate\u001b[0m\u001b[0;34m)\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0mfloat\u001b[0m\u001b[0;34m(\u001b[0m\u001b[0;34m)\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0munsqueeze\u001b[0m\u001b[0;34m(\u001b[0m\u001b[0;36m0\u001b[0m\u001b[0;34m)\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0mto\u001b[0m\u001b[0;34m(\u001b[0m\u001b[0mdevice\u001b[0m\u001b[0;34m)\u001b[0m\u001b[0;34m\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[0;32m---> 67\u001b[0;31m         \u001b[0mact_probs\u001b[0m \u001b[0;34m=\u001b[0m \u001b[0mself\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0mpolicy_model\u001b[0m\u001b[0;34m(\u001b[0m\u001b[0mt_state\u001b[0m\u001b[0;34m)\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0mcpu\u001b[0m\u001b[0;34m(\u001b[0m\u001b[0;34m)\u001b[0m\u001b[0;34m\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[0m\u001b[1;32m     68\u001b[0m         \u001b[0mact_distr\u001b[0m \u001b[0;34m=\u001b[0m \u001b[0mtorch\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0mdistributions\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0mCategorical\u001b[0m\u001b[0;34m(\u001b[0m\u001b[0mact_probs\u001b[0m\u001b[0;34m)\u001b[0m\u001b[0;34m\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[1;32m     69\u001b[0m         \u001b[0mact\u001b[0m \u001b[0;34m=\u001b[0m \u001b[0mact_distr\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0msample\u001b[0m\u001b[0;34m(\u001b[0m\u001b[0;34m)\u001b[0m\u001b[0;34m\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n",
+      "\u001b[0;32m~/.local/lib/python3.7/site-packages/torch/nn/modules/module.py\u001b[0m in \u001b[0;36m__call__\u001b[0;34m(self, *input, **kwargs)\u001b[0m\n\u001b[1;32m    491\u001b[0m             \u001b[0mresult\u001b[0m \u001b[0;34m=\u001b[0m \u001b[0mself\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0m_slow_forward\u001b[0m\u001b[0;34m(\u001b[0m\u001b[0;34m*\u001b[0m\u001b[0minput\u001b[0m\u001b[0;34m,\u001b[0m \u001b[0;34m**\u001b[0m\u001b[0mkwargs\u001b[0m\u001b[0;34m)\u001b[0m\u001b[0;34m\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[1;32m    492\u001b[0m         \u001b[0;32melse\u001b[0m\u001b[0;34m:\u001b[0m\u001b[0;34m\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[0;32m--> 493\u001b[0;31m             \u001b[0mresult\u001b[0m \u001b[0;34m=\u001b[0m \u001b[0mself\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0mforward\u001b[0m\u001b[0;34m(\u001b[0m\u001b[0;34m*\u001b[0m\u001b[0minput\u001b[0m\u001b[0;34m,\u001b[0m \u001b[0;34m**\u001b[0m\u001b[0mkwargs\u001b[0m\u001b[0;34m)\u001b[0m\u001b[0;34m\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[0m\u001b[1;32m    494\u001b[0m         \u001b[0;32mfor\u001b[0m \u001b[0mhook\u001b[0m \u001b[0;32min\u001b[0m \u001b[0mself\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0m_forward_hooks\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0mvalues\u001b[0m\u001b[0;34m(\u001b[0m\u001b[0;34m)\u001b[0m\u001b[0;34m:\u001b[0m\u001b[0;34m\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[1;32m    495\u001b[0m             \u001b[0mhook_result\u001b[0m \u001b[0;34m=\u001b[0m \u001b[0mhook\u001b[0m\u001b[0;34m(\u001b[0m\u001b[0mself\u001b[0m\u001b[0;34m,\u001b[0m \u001b[0minput\u001b[0m\u001b[0;34m,\u001b[0m \u001b[0mresult\u001b[0m\u001b[0;34m)\u001b[0m\u001b[0;34m\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n",
+      "\u001b[0;32m<ipython-input-619-b904a090edc8>\u001b[0m in \u001b[0;36mforward\u001b[0;34m(self, inp)\u001b[0m\n\u001b[1;32m     16\u001b[0m \u001b[0;34m\u001b[0m\u001b[0m\n\u001b[1;32m     17\u001b[0m     \u001b[0;32mdef\u001b[0m \u001b[0mforward\u001b[0m\u001b[0;34m(\u001b[0m\u001b[0mself\u001b[0m\u001b[0;34m,\u001b[0m \u001b[0minp\u001b[0m\u001b[0;34m)\u001b[0m\u001b[0;34m:\u001b[0m\u001b[0;34m\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[0;32m---> 18\u001b[0;31m         \u001b[0;32mreturn\u001b[0m \u001b[0mF\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0msoftmax\u001b[0m\u001b[0;34m(\u001b[0m\u001b[0mself\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0mmain\u001b[0m\u001b[0;34m(\u001b[0m\u001b[0minp\u001b[0m\u001b[0;34m)\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0mview\u001b[0m\u001b[0;34m(\u001b[0m\u001b[0;34m-\u001b[0m\u001b[0;36m1\u001b[0m\u001b[0;34m)\u001b[0m\u001b[0;34m,\u001b[0m \u001b[0mdim\u001b[0m\u001b[0;34m=\u001b[0m\u001b[0;36m0\u001b[0m\u001b[0;34m)\u001b[0m\u001b[0;34m\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[0m",
+      "\u001b[0;32m~/.local/lib/python3.7/site-packages/torch/nn/modules/module.py\u001b[0m in \u001b[0;36m__call__\u001b[0;34m(self, *input, **kwargs)\u001b[0m\n\u001b[1;32m    491\u001b[0m             \u001b[0mresult\u001b[0m \u001b[0;34m=\u001b[0m \u001b[0mself\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0m_slow_forward\u001b[0m\u001b[0;34m(\u001b[0m\u001b[0;34m*\u001b[0m\u001b[0minput\u001b[0m\u001b[0;34m,\u001b[0m \u001b[0;34m**\u001b[0m\u001b[0mkwargs\u001b[0m\u001b[0;34m)\u001b[0m\u001b[0;34m\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[1;32m    492\u001b[0m         \u001b[0;32melse\u001b[0m\u001b[0;34m:\u001b[0m\u001b[0;34m\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[0;32m--> 493\u001b[0;31m             \u001b[0mresult\u001b[0m \u001b[0;34m=\u001b[0m \u001b[0mself\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0mforward\u001b[0m\u001b[0;34m(\u001b[0m\u001b[0;34m*\u001b[0m\u001b[0minput\u001b[0m\u001b[0;34m,\u001b[0m \u001b[0;34m**\u001b[0m\u001b[0mkwargs\u001b[0m\u001b[0;34m)\u001b[0m\u001b[0;34m\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[0m\u001b[1;32m    494\u001b[0m         \u001b[0;32mfor\u001b[0m \u001b[0mhook\u001b[0m \u001b[0;32min\u001b[0m \u001b[0mself\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0m_forward_hooks\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0mvalues\u001b[0m\u001b[0;34m(\u001b[0m\u001b[0;34m)\u001b[0m\u001b[0;34m:\u001b[0m\u001b[0;34m\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[1;32m    495\u001b[0m             \u001b[0mhook_result\u001b[0m \u001b[0;34m=\u001b[0m \u001b[0mhook\u001b[0m\u001b[0;34m(\u001b[0m\u001b[0mself\u001b[0m\u001b[0;34m,\u001b[0m \u001b[0minput\u001b[0m\u001b[0;34m,\u001b[0m \u001b[0mresult\u001b[0m\u001b[0;34m)\u001b[0m\u001b[0;34m\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n",
+      "\u001b[0;32m~/.local/lib/python3.7/site-packages/torch/nn/modules/container.py\u001b[0m in \u001b[0;36mforward\u001b[0;34m(self, input)\u001b[0m\n\u001b[1;32m     90\u001b[0m     \u001b[0;32mdef\u001b[0m \u001b[0mforward\u001b[0m\u001b[0;34m(\u001b[0m\u001b[0mself\u001b[0m\u001b[0;34m,\u001b[0m \u001b[0minput\u001b[0m\u001b[0;34m)\u001b[0m\u001b[0;34m:\u001b[0m\u001b[0;34m\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[1;32m     91\u001b[0m         \u001b[0;32mfor\u001b[0m \u001b[0mmodule\u001b[0m \u001b[0;32min\u001b[0m \u001b[0mself\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0m_modules\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0mvalues\u001b[0m\u001b[0;34m(\u001b[0m\u001b[0;34m)\u001b[0m\u001b[0;34m:\u001b[0m\u001b[0;34m\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[0;32m---> 92\u001b[0;31m             \u001b[0minput\u001b[0m \u001b[0;34m=\u001b[0m \u001b[0mmodule\u001b[0m\u001b[0;34m(\u001b[0m\u001b[0minput\u001b[0m\u001b[0;34m)\u001b[0m\u001b[0;34m\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[0m\u001b[1;32m     93\u001b[0m         \u001b[0;32mreturn\u001b[0m \u001b[0minput\u001b[0m\u001b[0;34m\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[1;32m     94\u001b[0m \u001b[0;34m\u001b[0m\u001b[0m\n",
+      "\u001b[0;32m~/.local/lib/python3.7/site-packages/torch/nn/modules/module.py\u001b[0m in \u001b[0;36m__call__\u001b[0;34m(self, *input, **kwargs)\u001b[0m\n\u001b[1;32m    486\u001b[0m \u001b[0;34m\u001b[0m\u001b[0m\n\u001b[1;32m    487\u001b[0m     \u001b[0;32mdef\u001b[0m \u001b[0m__call__\u001b[0m\u001b[0;34m(\u001b[0m\u001b[0mself\u001b[0m\u001b[0;34m,\u001b[0m \u001b[0;34m*\u001b[0m\u001b[0minput\u001b[0m\u001b[0;34m,\u001b[0m \u001b[0;34m**\u001b[0m\u001b[0mkwargs\u001b[0m\u001b[0;34m)\u001b[0m\u001b[0;34m:\u001b[0m\u001b[0;34m\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[0;32m--> 488\u001b[0;31m         \u001b[0;32mfor\u001b[0m \u001b[0mhook\u001b[0m \u001b[0;32min\u001b[0m \u001b[0mself\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0m_forward_pre_hooks\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0mvalues\u001b[0m\u001b[0;34m(\u001b[0m\u001b[0;34m)\u001b[0m\u001b[0;34m:\u001b[0m\u001b[0;34m\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[0m\u001b[1;32m    489\u001b[0m             \u001b[0mhook\u001b[0m\u001b[0;34m(\u001b[0m\u001b[0mself\u001b[0m\u001b[0;34m,\u001b[0m \u001b[0minput\u001b[0m\u001b[0;34m)\u001b[0m\u001b[0;34m\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[1;32m    490\u001b[0m         \u001b[0;32mif\u001b[0m \u001b[0mtorch\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0m_C\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0m_get_tracing_state\u001b[0m\u001b[0;34m(\u001b[0m\u001b[0;34m)\u001b[0m\u001b[0;34m:\u001b[0m\u001b[0;34m\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n",
+      "\u001b[0;31mKeyboardInterrupt\u001b[0m: "
+     ]
+    }
+   ],
+   "source": [
+    "#if env: env.close()\n",
+    "env = gym.make('CartPole-v1')\n",
+    "\n",
+    "buffer = ReplayBuffer()\n",
+    "agent = Agent(buffer)\n",
+    "\n",
+    "total_rewards = []\n",
+    "\n",
+    "for e in tqdm(range(1000)):\n",
+    "    \n",
+    "    s = env.reset()\n",
+    "    a, probs = agent.select([s])\n",
+    "    \n",
+    "    total_reward = 0\n",
+    "    \n",
+    "    for t in range(2000):\n",
+    "        s_, r, done, info = env.step(a)\n",
+    "        \n",
+    "        total_reward += r\n",
+    "        \n",
+    "        buffer.add_obs( probs, s_, r, done )\n",
+    "        \n",
+    "        a, probs = agent.select([s_])\n",
+    "        \n",
+    "        if done:\n",
+    "            total_rewards += [total_reward]\n",
+    "            \n",
+    "            #print('reward', total_reward)\n",
+    "            loss = agent.train_iter()\n",
+    "            if e % 10 == 0:\n",
+    "                print(f'Episiode {e}, episode reward {total_reward}, total reward {np.round(np.mean(total_rewards),2)} loss: {loss}')\n",
+    "            \n",
+    "            break\n",
+    "        \n",
+    "        "
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 627,
+   "metadata": {},
+   "outputs": [
+    {
+     "data": {
+      "text/plain": [
+       "[<matplotlib.lines.Line2D at 0x7f5da7fae4e0>]"
+      ]
+     },
+     "execution_count": 627,
+     "metadata": {},
+     "output_type": "execute_result"
+    },
+    {
+     "data": {
+      "image/png": "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\n",
+      "text/plain": [
+       "<Figure size 432x288 with 1 Axes>"
+      ]
+     },
+     "metadata": {
+      "needs_background": "light"
+     },
+     "output_type": "display_data"
+    }
+   ],
+   "source": [
+    "plt.plot(ma(ma(total_rewards,100), 1))\n"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": []
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "## A2C\n",
+    "\n",
+    "Advantage batch actor critic"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 4,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "GAMMA = 0.99\n",
+    "LEARNING_RATE = 0.02\n",
+    "BETAS = (0.9, 0.999)"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 5,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "class PG(nn.Module):\n",
+    "    def __init__(self, inner_size=[64,64]):\n",
+    "        super(PG,self).__init__()\n",
+    "        \n",
+    "        self.actoin_space = env.action_space.n\n",
+    "        self.observation_space = env.observation_space.shape[0]\n",
+    "        \n",
+    "        seq = []\n",
+    "        for i in range(len(inner_size)):\n",
+    "            if i == 0:\n",
+    "                seq += [nn.Linear(self.observation_space, inner_size[i])]\n",
+    "                seq += [nn.ReLU()]\n",
+    "            if i == len(inner_size)-1:\n",
+    "                seq += [nn.Linear(inner_size[i], self.actoin_space)]\n",
+    "            else:\n",
+    "                seq += [nn.Linear(inner_size[i-1], inner_size[i])]\n",
+    "            \n",
+    "            if i < len(inner_size)-1:\n",
+    "                seq += [nn.ReLU()]\n",
+    "        \n",
+    "        self.main = nn.Sequential(\n",
+    "            *seq\n",
+    "        )\n",
+    "        \n",
+    "        self.main.apply(self.init_w)\n",
+    "    \n",
+    "    def init_w(self, a):\n",
+    "        if isinstance(a, nn.Linear):\n",
+    "            torch.nn.init.xavier_uniform(a.weight)\n",
+    "        \n",
+    "    \n",
+    "    def forward(self, inp):\n",
+    "        return F.softmax(self.main(inp).view(-1), dim=0)\n",
+    "\n",
+    "class Critic(nn.Module):\n",
+    "    def __init__(self, inner_size):\n",
+    "        super(Critic,self).__init__()\n",
+    "        \n",
+    "        self.actoin_space = env.action_space.n\n",
+    "        self.observation_space = env.observation_space.shape[0]\n",
+    "        \n",
+    "        seq = []\n",
+    "        for i in range(len(inner_size)):\n",
+    "            if i == 0:\n",
+    "                seq += [nn.Linear(self.observation_space, inner_size[i])]\n",
+    "                seq += [nn.ReLU()]\n",
+    "            if i == len(inner_size)-1:\n",
+    "                seq += [nn.Linear(inner_size[i], 1)]\n",
+    "                #seq += [nn.Linear(inner_size[i], self.actoin_space)]\n",
+    "            else:\n",
+    "                seq += [nn.Linear(inner_size[i-1], inner_size[i])]\n",
+    "            \n",
+    "            if i < len(inner_size)-1:\n",
+    "                seq += [nn.ReLU()]\n",
+    "        \n",
+    "        self.main = nn.Sequential(\n",
+    "            *seq\n",
+    "        )\n",
+    "        \n",
+    "        self.main.apply(self.init_w)\n",
+    "    \n",
+    "    def init_w(self, a):\n",
+    "        if isinstance(a, nn.Linear):\n",
+    "            torch.nn.init.xavier_uniform(a.weight)\n",
+    "    \n",
+    "    def forward(self, inp):\n",
+    "        return self.main(inp)\n",
+    "\n",
+    "class ReplayBufferAC():\n",
+    "    def __init__(self, size = 100):\n",
+    "        \n",
+    "        self.size = size\n",
+    "        self.actoin_space = env.action_space.n\n",
+    "        self.observation_space = env.observation_space.shape[0]\n",
+    "        \n",
+    "        self.states = []\n",
+    "        self.probs = []\n",
+    "        self.rewards = []\n",
+    "        \n",
+    "        self.eps = torch.tensor(1e-8).to(device)\n",
+    "        \n",
+    "        self.begin_episode()\n",
+    "        \n",
+    "    def begin_episode(self):\n",
+    "        self.actions = []\n",
+    "        self.states = []\n",
+    "        self.probs = []\n",
+    "        self.rewards = []\n",
+    "        \n",
+    "    def add_obs(self, a, p, s, r, d):\n",
+    "        \n",
+    "        self.actions += [a]\n",
+    "        self.states += [s]\n",
+    "        self.probs += [p]\n",
+    "        self.rewards += [r]\n",
+    "        \n",
+    "    def sample_actor(self):\n",
+    "        \n",
+    "        probs = torch.cat(self.probs).view(-1).to(device)\n",
+    "        \n",
+    "        return probs\n",
+    "    \n",
+    "    def sample_critic(self):\n",
+    "        \n",
+    "        states = np.concatenate(self.states).reshape(-1, self.observation_space)\n",
+    "        states = torch.tensor(states).to(device)\n",
+    "        actions = torch.tensor(self.actions).to(device)\n",
+    "        rewards = torch.tensor(self.rewards).to(device)\n",
+    "        next_states = torch.roll(states,-1)\n",
+    "        next_action_mask = torch.ones(len(self.rewards)).to(device)\n",
+    "        next_action_mask[-1] = 0.0\n",
+    "        \n",
+    "        returns = [np.dot( GAMMA**np.arange(1,len(self.rewards)-i+1), self.rewards[i:] ) for i in range(len(self.rewards))]\n",
+    "        returns = torch.tensor(returns).to(device)\n",
+    "        returns = (returns - returns.mean()) / (returns.std() + self.eps)\n",
+    "        \n",
+    "        return states, next_states, actions, rewards, next_action_mask, returns\n",
+    "\n",
+    "class AgentAC():\n",
+    "    def __init__(self, rb):\n",
+    "        \n",
+    "        self.policy_model = PG([128]).to(device)\n",
+    "        self.value_model = Critic([128]).to(device)\n",
+    "        \n",
+    "        self.actoin_space = env.action_space.n\n",
+    "        \n",
+    "        self.replay = rb\n",
+    "        \n",
+    "        self.policy_opt = torch.optim.Adam(\n",
+    "            self.policy_model.parameters(), lr=LEARNING_RATE,\n",
+    "        )\n",
+    "        \n",
+    "        self.value_opt = torch.optim.Adam(\n",
+    "            self.value_model.parameters(), lr=LEARNING_RATE\n",
+    "        )\n",
+    "    \n",
+    "    def train_critic(self, states, next_states, actions, rewards, next_state_masks, returns_r):\n",
+    "        \n",
+    "        actions_mask = torch.zeros((actions.shape[0], self.actoin_space)).\\\n",
+    "            to(device).scatter_(1, actions.view(-1,1), 1).byte()\n",
+    "        \n",
+    "        loss = F.smooth_l1_loss(self.value_model(states.float()).view(-1), returns_r)\n",
+    "        \n",
+    "        self.value_opt.zero_grad()\n",
+    "        loss.backward()\n",
+    "        self.value_opt.step()\n",
+    "        \n",
+    "        return loss.item()\n",
+    "        \n",
+    "    def train_actor(self, log_probs, returns):\n",
+    "        \n",
+    "        loss = (-log_probs * returns).mean()\n",
+    "        \n",
+    "        self.policy_opt.zero_grad()\n",
+    "        loss.backward()\n",
+    "        self.policy_opt.step()\n",
+    "        \n",
+    "        return loss.item()\n",
+    "    \n",
+    "    def train_iter(self):\n",
+    "        \n",
+    "        log_probs = self.replay.sample_actor()\n",
+    "        states, next_states, actions, rewards, next_state_masks, returns_r = self.replay.sample_critic()\n",
+    "        \n",
+    "        returns_ac = returns_r - self.value_model(states.float()).clone().detach().view(-1)\n",
+    "        \n",
+    "        actor_loss = self.train_actor(log_probs, returns_ac)\n",
+    "        \n",
+    "        critic_loss = self.train_critic(states, next_states, actions, rewards, next_state_masks, returns_r)\n",
+    "        \n",
+    "        return actor_loss, critic_loss\n",
+    "    \n",
+    "    def select(self, state, explore=True):\n",
+    "        \n",
+    "        t_state = torch.tensor(state).float().unsqueeze(0).to(device)\n",
+    "        act_probs = self.policy_model(t_state).cpu()\n",
+    "        act_distr = torch.distributions.Categorical(act_probs)\n",
+    "        \n",
+    "        if not explore:\n",
+    "            act = act_probs.argmax()\n",
+    "            #print(act)\n",
+    "            log_probs = None\n",
+    "        else:\n",
+    "            act = act_distr.sample()\n",
+    "            log_probs = act_distr.log_prob(act).view(1,-1)\n",
+    "        \n",
+    "        return act.item(), log_probs        \n",
+    "        "
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": []
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 27,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "def run_eval():\n",
+    "    \n",
+    "    print('Eval')\n",
+    "    \n",
+    "    s = env.reset()\n",
+    "    a, probs = agent.select([s], False)\n",
+    "    \n",
+    "    for t in range(2000):\n",
+    "        \n",
+    "        s_, r, done, info = env.step(a)\n",
+    "        a, probs = agent.select([s_], False)\n",
+    "        s = s_\n",
+    "\n",
+    "        env.render()\n",
+    "\n",
+    "        if done:\n",
+    "            env.reset()\n",
+    "            break"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 631,
+   "metadata": {
+    "scrolled": true
+   },
+   "outputs": [
+    {
+     "name": "stderr",
+     "output_type": "stream",
+     "text": [
+      "/opt/conda/lib/python3.7/site-packages/ipykernel_launcher.py:29: UserWarning: nn.init.xavier_uniform is now deprecated in favor of nn.init.xavier_uniform_.\n",
+      "/opt/conda/lib/python3.7/site-packages/ipykernel_launcher.py:64: UserWarning: nn.init.xavier_uniform is now deprecated in favor of nn.init.xavier_uniform_.\n"
+     ]
+    },
+    {
+     "data": {
+      "application/vnd.jupyter.widget-view+json": {
+       "model_id": "94529571c659488abfd6a406b4bf0caf",
+       "version_major": 2,
+       "version_minor": 0
+      },
+      "text/plain": [
+       "HBox(children=(IntProgress(value=0, max=2000), HTML(value='')))"
+      ]
+     },
+     "metadata": {},
+     "output_type": "display_data"
+    },
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "Episiode 9, episode reward -186.03, total reward -186.03, loss: (0.24635688960552216, 1.0956008434295654)\n",
+      "Episiode 19, episode reward -150.64, total reward -168.34, loss: (0.10995705425739288, 0.44929996132850647)\n",
+      "Episiode 29, episode reward -169.51, total reward -168.73, loss: (-0.03542198985815048, 0.2960583567619324)\n",
+      "Episiode 39, episode reward -173.85, total reward -170.01, loss: (0.07044672220945358, 0.2104223668575287)\n",
+      "Episiode 49, episode reward -105.76, total reward -157.16, loss: (-0.02748086489737034, 0.29463714361190796)\n",
+      "Episiode 59, episode reward -88.24, total reward -145.67, loss: (0.06793536245822906, 0.45005732774734497)\n",
+      "Episiode 69, episode reward -110.64, total reward -140.67, loss: (-0.15976259112358093, 0.14051999151706696)\n",
+      "Episiode 79, episode reward -155.12, total reward -142.47, loss: (0.06681934744119644, 0.3102479875087738)\n",
+      "Episiode 89, episode reward -100.37, total reward -137.8, loss: (-0.11373952031135559, 0.05020476505160332)\n",
+      "Episiode 99, episode reward -174.0, total reward -141.42, loss: (-0.20337505638599396, 0.154571995139122)\n",
+      "Episiode 109, episode reward -307.4, total reward -156.51, loss: (-0.4356831908226013, 0.5893345475196838)\n",
+      "Episiode 119, episode reward -103.59, total reward -152.1, loss: (0.48289749026298523, 0.2899303138256073)\n",
+      "Episiode 129, episode reward -152.13, total reward -152.1, loss: (0.21018986403942108, 0.2849619686603546)\n",
+      "Episiode 139, episode reward -63.8, total reward -145.79, loss: (-0.2839556932449341, 0.48398932814598083)\n",
+      "Episiode 149, episode reward -26.78, total reward -137.86, loss: (-0.10754285007715225, 0.20308446884155273)\n",
+      "Episiode 159, episode reward -78.11, total reward -134.12, loss: (0.2420826256275177, 0.20400895178318024)\n",
+      "Episiode 169, episode reward -47.15, total reward -129.01, loss: (0.05721181258559227, 0.23631612956523895)\n",
+      "Episiode 179, episode reward -7.48, total reward -122.26, loss: (0.10426825284957886, 0.11977947503328323)\n",
+      "Episiode 189, episode reward -36.78, total reward -117.76, loss: (0.06236449256539345, 0.11198794841766357)\n",
+      "Episiode 199, episode reward -42.14, total reward -113.98, loss: (-0.3045097291469574, 0.20383508503437042)\n",
+      "Episiode 209, episode reward 3.1, total reward -108.4, loss: (0.25130772590637207, 0.15283188223838806)\n",
+      "Episiode 219, episode reward -2.41, total reward -103.58, loss: (0.2770986557006836, 0.12978217005729675)\n",
+      "Episiode 229, episode reward -22.12, total reward -100.04, loss: (0.07090228796005249, 0.1073199138045311)\n",
+      "Episiode 239, episode reward -10.31, total reward -96.3, loss: (0.11922986805438995, 0.038381800055503845)\n",
+      "Episiode 249, episode reward -8.56, total reward -92.79, loss: (0.5399521589279175, 0.43775391578674316)\n",
+      "Episiode 259, episode reward 30.01, total reward -88.07, loss: (0.024618443101644516, 0.09625157713890076)\n",
+      "Episiode 269, episode reward -19.02, total reward -85.51, loss: (-0.06466955691576004, 0.07749297469854355)\n",
+      "Episiode 279, episode reward 28.96, total reward -81.42, loss: (-0.14579956233501434, 0.024426104500889778)\n",
+      "Episiode 289, episode reward 63.22, total reward -76.44, loss: (0.009106217883527279, 0.860328733921051)\n",
+      "Episiode 299, episode reward 29.16, total reward -72.92, loss: (-0.5718173980712891, 0.31552597880363464)\n",
+      "Episiode 309, episode reward 49.18, total reward -68.98, loss: (-0.049445100128650665, 0.06216636672616005)\n",
+      "Episiode 319, episode reward -24.77, total reward -67.6, loss: (0.7121397256851196, 0.8051325082778931)\n",
+      "Episiode 329, episode reward -70.13, total reward -67.67, loss: (-0.03953564167022705, 0.11624264717102051)\n",
+      "Episiode 339, episode reward -63.77, total reward -67.56, loss: (-0.11179563403129578, 0.022593671455979347)\n",
+      "Episiode 349, episode reward -93.11, total reward -68.29, loss: (-0.00921778567135334, 0.03662051633000374)\n",
+      "Episiode 359, episode reward -125.81, total reward -69.89, loss: (-0.01416749320924282, 0.06349489837884903)\n",
+      "Episiode 369, episode reward -29.69, total reward -68.8, loss: (-0.1850426197052002, 0.09599592536687851)\n",
+      "Episiode 379, episode reward -3.64, total reward -67.09, loss: (-0.2704102694988251, 0.117508165538311)\n",
+      "Episiode 389, episode reward 29.88, total reward -64.6, loss: (-0.04892107471823692, 0.16268792748451233)\n",
+      "Episiode 399, episode reward -30.89, total reward -63.76, loss: (-0.12180503457784653, 0.033586058765649796)\n",
+      "Episiode 409, episode reward 147.08, total reward -58.61, loss: (-0.11170176416635513, 0.24518555402755737)\n",
+      "Episiode 419, episode reward -15.4, total reward -57.59, loss: (0.39878490567207336, 0.3440045714378357)\n",
+      "Episiode 429, episode reward -72.15, total reward -57.92, loss: (0.426660418510437, 0.2205994874238968)\n",
+      "Episiode 439, episode reward -7.79, total reward -56.78, loss: (-0.17180699110031128, 0.1293739229440689)\n",
+      "Episiode 449, episode reward -78.94, total reward -57.28, loss: (0.2000892162322998, 0.06244676932692528)\n",
+      "Episiode 459, episode reward -147.21, total reward -59.23, loss: (-0.5698131322860718, 0.5574518442153931)\n",
+      "Episiode 469, episode reward -146.01, total reward -61.08, loss: (0.39847853779792786, 0.3976673483848572)\n",
+      "Episiode 479, episode reward -60.76, total reward -61.07, loss: (0.17829079926013947, 0.3430166244506836)\n",
+      "Episiode 489, episode reward -41.73, total reward -60.68, loss: (0.1656104177236557, 0.2887590825557709)\n",
+      "Episiode 499, episode reward 46.08, total reward -58.54, loss: (0.061021119356155396, 0.2475157231092453)\n",
+      "Episiode 509, episode reward 37.74, total reward -56.65, loss: (-0.29681387543678284, 0.41787949204444885)\n",
+      "Episiode 519, episode reward 122.93, total reward -53.2, loss: (-0.007091274484992027, 0.2567625343799591)\n",
+      "Episiode 529, episode reward 119.78, total reward -49.94, loss: (-0.0053405542857944965, 0.2673948109149933)\n",
+      "Episiode 539, episode reward 186.37, total reward -45.56, loss: (-0.26357728242874146, 0.2627703547477722)\n",
+      "Episiode 549, episode reward 207.69, total reward -40.96, loss: (0.17437277734279633, 0.22839844226837158)\n",
+      "Episiode 559, episode reward 174.56, total reward -37.11, loss: (0.09721200913190842, 0.2056201696395874)\n",
+      "Episiode 569, episode reward 107.68, total reward -34.57, loss: (-0.294456422328949, 0.3892652690410614)\n",
+      "Episiode 579, episode reward 111.73, total reward -32.05, loss: (0.3080856502056122, 0.2859293520450592)\n",
+      "Episiode 589, episode reward 48.63, total reward -30.68, loss: (0.01621869020164013, 0.16486188769340515)\n"
+     ]
+    },
+    {
+     "ename": "KeyboardInterrupt",
+     "evalue": "",
+     "output_type": "error",
+     "traceback": [
+      "\u001b[0;31m---------------------------------------------------------------------------\u001b[0m",
+      "\u001b[0;31mKeyboardInterrupt\u001b[0m                         Traceback (most recent call last)",
+      "\u001b[0;32m<ipython-input-631-a389a4060f2b>\u001b[0m in \u001b[0;36m<module>\u001b[0;34m\u001b[0m\n\u001b[1;32m     18\u001b[0m \u001b[0;34m\u001b[0m\u001b[0m\n\u001b[1;32m     19\u001b[0m     \u001b[0;32mfor\u001b[0m \u001b[0mt\u001b[0m \u001b[0;32min\u001b[0m \u001b[0mrange\u001b[0m\u001b[0;34m(\u001b[0m\u001b[0;36m2000\u001b[0m\u001b[0;34m)\u001b[0m\u001b[0;34m:\u001b[0m\u001b[0;34m\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[0;32m---> 20\u001b[0;31m         \u001b[0ms_\u001b[0m\u001b[0;34m,\u001b[0m \u001b[0mr\u001b[0m\u001b[0;34m,\u001b[0m \u001b[0mdone\u001b[0m\u001b[0;34m,\u001b[0m \u001b[0minfo\u001b[0m \u001b[0;34m=\u001b[0m \u001b[0menv\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0mstep\u001b[0m\u001b[0;34m(\u001b[0m\u001b[0ma\u001b[0m\u001b[0;34m)\u001b[0m\u001b[0;34m\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[0m\u001b[1;32m     21\u001b[0m \u001b[0;34m\u001b[0m\u001b[0m\n\u001b[1;32m     22\u001b[0m         \u001b[0mtotal_reward\u001b[0m \u001b[0;34m+=\u001b[0m \u001b[0mr\u001b[0m\u001b[0;34m\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n",
+      "\u001b[0;32m~/.local/lib/python3.7/site-packages/gym/wrappers/time_limit.py\u001b[0m in \u001b[0;36mstep\u001b[0;34m(self, action)\u001b[0m\n\u001b[1;32m     13\u001b[0m     \u001b[0;32mdef\u001b[0m \u001b[0mstep\u001b[0m\u001b[0;34m(\u001b[0m\u001b[0mself\u001b[0m\u001b[0;34m,\u001b[0m \u001b[0maction\u001b[0m\u001b[0;34m)\u001b[0m\u001b[0;34m:\u001b[0m\u001b[0;34m\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[1;32m     14\u001b[0m         \u001b[0;32massert\u001b[0m \u001b[0mself\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0m_elapsed_steps\u001b[0m \u001b[0;32mis\u001b[0m \u001b[0;32mnot\u001b[0m \u001b[0;32mNone\u001b[0m\u001b[0;34m,\u001b[0m \u001b[0;34m\"Cannot call env.step() before calling reset()\"\u001b[0m\u001b[0;34m\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[0;32m---> 15\u001b[0;31m         \u001b[0mobservation\u001b[0m\u001b[0;34m,\u001b[0m \u001b[0mreward\u001b[0m\u001b[0;34m,\u001b[0m \u001b[0mdone\u001b[0m\u001b[0;34m,\u001b[0m \u001b[0minfo\u001b[0m \u001b[0;34m=\u001b[0m \u001b[0mself\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0menv\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0mstep\u001b[0m\u001b[0;34m(\u001b[0m\u001b[0maction\u001b[0m\u001b[0;34m)\u001b[0m\u001b[0;34m\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[0m\u001b[1;32m     16\u001b[0m         \u001b[0mself\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0m_elapsed_steps\u001b[0m \u001b[0;34m+=\u001b[0m \u001b[0;36m1\u001b[0m\u001b[0;34m\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[1;32m     17\u001b[0m         \u001b[0;32mif\u001b[0m \u001b[0mself\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0m_elapsed_steps\u001b[0m \u001b[0;34m>=\u001b[0m \u001b[0mself\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0m_max_episode_steps\u001b[0m\u001b[0;34m:\u001b[0m\u001b[0;34m\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n",
+      "\u001b[0;32m~/.local/lib/python3.7/site-packages/gym/envs/box2d/lunar_lander.py\u001b[0m in \u001b[0;36mstep\u001b[0;34m(self, action)\u001b[0m\n\u001b[1;32m    279\u001b[0m             \u001b[0mself\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0mlander\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0mApplyLinearImpulse\u001b[0m\u001b[0;34m(\u001b[0m \u001b[0;34m(\u001b[0m\u001b[0;34m-\u001b[0m\u001b[0mox\u001b[0m\u001b[0;34m*\u001b[0m\u001b[0mSIDE_ENGINE_POWER\u001b[0m\u001b[0;34m*\u001b[0m\u001b[0ms_power\u001b[0m\u001b[0;34m,\u001b[0m \u001b[0;34m-\u001b[0m\u001b[0moy\u001b[0m\u001b[0;34m*\u001b[0m\u001b[0mSIDE_ENGINE_POWER\u001b[0m\u001b[0;34m*\u001b[0m\u001b[0ms_power\u001b[0m\u001b[0;34m)\u001b[0m\u001b[0;34m,\u001b[0m \u001b[0mimpulse_pos\u001b[0m\u001b[0;34m,\u001b[0m \u001b[0;32mTrue\u001b[0m\u001b[0;34m)\u001b[0m\u001b[0;34m\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[1;32m    280\u001b[0m \u001b[0;34m\u001b[0m\u001b[0m\n\u001b[0;32m--> 281\u001b[0;31m         \u001b[0mself\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0mworld\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0mStep\u001b[0m\u001b[0;34m(\u001b[0m\u001b[0;36m1.0\u001b[0m\u001b[0;34m/\u001b[0m\u001b[0mFPS\u001b[0m\u001b[0;34m,\u001b[0m \u001b[0;36m6\u001b[0m\u001b[0;34m*\u001b[0m\u001b[0;36m30\u001b[0m\u001b[0;34m,\u001b[0m \u001b[0;36m2\u001b[0m\u001b[0;34m*\u001b[0m\u001b[0;36m30\u001b[0m\u001b[0;34m)\u001b[0m\u001b[0;34m\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[0m\u001b[1;32m    282\u001b[0m \u001b[0;34m\u001b[0m\u001b[0m\n\u001b[1;32m    283\u001b[0m         \u001b[0mpos\u001b[0m \u001b[0;34m=\u001b[0m \u001b[0mself\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0mlander\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0mposition\u001b[0m\u001b[0;34m\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n",
+      "\u001b[0;32m~/.local/lib/python3.7/site-packages/gym/envs/box2d/lunar_lander.py\u001b[0m in \u001b[0;36mBeginContact\u001b[0;34m(self, contact)\u001b[0m\n\u001b[1;32m     60\u001b[0m         \u001b[0mcontactListener\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0m__init__\u001b[0m\u001b[0;34m(\u001b[0m\u001b[0mself\u001b[0m\u001b[0;34m)\u001b[0m\u001b[0;34m\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[1;32m     61\u001b[0m         \u001b[0mself\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0menv\u001b[0m \u001b[0;34m=\u001b[0m \u001b[0menv\u001b[0m\u001b[0;34m\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[0;32m---> 62\u001b[0;31m     \u001b[0;32mdef\u001b[0m \u001b[0mBeginContact\u001b[0m\u001b[0;34m(\u001b[0m\u001b[0mself\u001b[0m\u001b[0;34m,\u001b[0m \u001b[0mcontact\u001b[0m\u001b[0;34m)\u001b[0m\u001b[0;34m:\u001b[0m\u001b[0;34m\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[0m\u001b[1;32m     63\u001b[0m         \u001b[0;32mif\u001b[0m \u001b[0mself\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0menv\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0mlander\u001b[0m\u001b[0;34m==\u001b[0m\u001b[0mcontact\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0mfixtureA\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0mbody\u001b[0m \u001b[0;32mor\u001b[0m \u001b[0mself\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0menv\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0mlander\u001b[0m\u001b[0;34m==\u001b[0m\u001b[0mcontact\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0mfixtureB\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0mbody\u001b[0m\u001b[0;34m:\u001b[0m\u001b[0;34m\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[1;32m     64\u001b[0m             \u001b[0mself\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0menv\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0mgame_over\u001b[0m \u001b[0;34m=\u001b[0m \u001b[0;32mTrue\u001b[0m\u001b[0;34m\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n",
+      "\u001b[0;31mKeyboardInterrupt\u001b[0m: "
+     ]
+    }
+   ],
+   "source": [
+    "env = gym.make('LunarLander-v2')\n",
+    "env.seed(42)\n",
+    "torch.manual_seed(42)\n",
+    "\n",
+    "buffer = ReplayBufferAC()\n",
+    "agent = AgentAC(buffer)\n",
+    "\n",
+    "total_rewards = []\n",
+    "\n",
+    "for e in tqdm(range(2000)):\n",
+    "    \n",
+    "    buffer.begin_episode()\n",
+    "    \n",
+    "    s = env.reset()\n",
+    "    a, probs = agent.select([s])\n",
+    "    \n",
+    "    total_reward = 0\n",
+    "    \n",
+    "    for t in range(2000):\n",
+    "        s_, r, done, info = env.step(a)\n",
+    "\n",
+    "        total_reward += r\n",
+    "\n",
+    "        buffer.add_obs( a, probs, s, r, done )\n",
+    "\n",
+    "        a, probs = agent.select([s_])\n",
+    "\n",
+    "        s = s_\n",
+    "\n",
+    "        if done:\n",
+    "\n",
+    "            total_rewards += [total_reward]\n",
+    "            \n",
+    "            loss = agent.train_iter()\n",
+    "            if e % 10 == 9:\n",
+    "                print(f'Episiode {e}, episode reward {np.round(np.mean(total_rewards[-10:]),2)}, total reward {np.round(np.mean(total_rewards),2)}, loss: {loss}')\n",
+    "            \n",
+    "            #if e == 1500: run_eval()\n",
+    "\n",
+    "            break"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 26,
+   "metadata": {},
+   "outputs": [
+    {
+     "data": {
+      "image/png": "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\n",
+      "text/plain": [
+       "<Figure size 432x288 with 1 Axes>"
+      ]
+     },
+     "metadata": {
+      "needs_background": "light"
+     },
+     "output_type": "display_data"
+    }
+   ],
+   "source": [
+    "plt.plot(ma(ma(total_rewards,50), 1))\n",
+    "plt.title('Реворды за эпизод A2C')\n",
+    "plt.show()"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 632,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "torch.save(agent.policy_model.state_dict(), './AC_snap/actor.pt')\n",
+    "torch.save(agent.value_model.state_dict(), './AC_snap/critic.pt')"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": []
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "### Демонстрация"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 6,
+   "metadata": {},
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "\u001b[33mWARN: gym.spaces.Box autodetected dtype as <class 'numpy.float32'>. Please provide explicit dtype.\u001b[0m\n"
+     ]
+    },
+    {
+     "name": "stderr",
+     "output_type": "stream",
+     "text": [
+      "/Users/ivan/anaconda3/lib/python3.6/site-packages/ipykernel_launcher.py:29: UserWarning: nn.init.xavier_uniform is now deprecated in favor of nn.init.xavier_uniform_.\n",
+      "/Users/ivan/anaconda3/lib/python3.6/site-packages/ipykernel_launcher.py:64: UserWarning: nn.init.xavier_uniform is now deprecated in favor of nn.init.xavier_uniform_.\n"
+     ]
+    }
+   ],
+   "source": [
+    "env = gym.make('LunarLander-v2')\n",
+    "env.seed(42)\n",
+    "torch.manual_seed(42)\n",
+    "\n",
+    "buffer_dem = ReplayBufferAC()\n",
+    "agent_dem = AgentAC(buffer_dem)\n",
+    "\n",
+    "agent_dem.policy_model.load_state_dict( torch.load('./AC_snap/actor.pt', map_location=device) )\n",
+    "agent_dem.value_model.load_state_dict( torch.load('./AC_snap/critic.pt', map_location=device) )\n",
+    "\n",
+    "def run_eval_dem():\n",
+    "    \n",
+    "    print('Eval')\n",
+    "    \n",
+    "    s = env.reset()\n",
+    "    a, probs = agent_dem.select([s], False)\n",
+    "    \n",
+    "    for t in range(2000):\n",
+    "        s_, r, done, info = env.step(a)\n",
+    "        a, probs = agent_dem.select([s_], False)\n",
+    "        s = s_\n",
+    "\n",
+    "        env.render()\n",
+    "\n",
+    "        if done:\n",
+    "            env.reset()\n",
+    "            break"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 7,
+   "metadata": {},
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "Eval\n",
+      "Eval\n",
+      "Eval\n",
+      "Eval\n",
+      "Eval\n",
+      "Eval\n",
+      "Eval\n",
+      "Eval\n",
+      "Eval\n",
+      "Eval\n"
+     ]
+    },
+    {
+     "ename": "KeyboardInterrupt",
+     "evalue": "",
+     "output_type": "error",
+     "traceback": [
+      "\u001b[0;31m---------------------------------------------------------------------------\u001b[0m",
+      "\u001b[0;31mKeyboardInterrupt\u001b[0m                         Traceback (most recent call last)",
+      "\u001b[0;32m<ipython-input-7-7301b5da6e6d>\u001b[0m in \u001b[0;36m<module>\u001b[0;34m()\u001b[0m\n\u001b[1;32m      1\u001b[0m \u001b[0;32mfor\u001b[0m \u001b[0mi\u001b[0m \u001b[0;32min\u001b[0m \u001b[0mrange\u001b[0m\u001b[0;34m(\u001b[0m\u001b[0;36m10\u001b[0m\u001b[0;34m)\u001b[0m\u001b[0;34m:\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[0;32m----> 2\u001b[0;31m     \u001b[0mrun_eval_dem\u001b[0m\u001b[0;34m(\u001b[0m\u001b[0;34m)\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[0m",
+      "\u001b[0;32m<ipython-input-6-6cddcc117321>\u001b[0m in \u001b[0;36mrun_eval_dem\u001b[0;34m()\u001b[0m\n\u001b[1;32m     17\u001b[0m \u001b[0;34m\u001b[0m\u001b[0m\n\u001b[1;32m     18\u001b[0m     \u001b[0;32mfor\u001b[0m \u001b[0mt\u001b[0m \u001b[0;32min\u001b[0m \u001b[0mrange\u001b[0m\u001b[0;34m(\u001b[0m\u001b[0;36m2000\u001b[0m\u001b[0;34m)\u001b[0m\u001b[0;34m:\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[0;32m---> 19\u001b[0;31m         \u001b[0ms_\u001b[0m\u001b[0;34m,\u001b[0m \u001b[0mr\u001b[0m\u001b[0;34m,\u001b[0m \u001b[0mdone\u001b[0m\u001b[0;34m,\u001b[0m \u001b[0minfo\u001b[0m \u001b[0;34m=\u001b[0m \u001b[0menv\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0mstep\u001b[0m\u001b[0;34m(\u001b[0m\u001b[0ma\u001b[0m\u001b[0;34m)\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[0m\u001b[1;32m     20\u001b[0m         \u001b[0ma\u001b[0m\u001b[0;34m,\u001b[0m \u001b[0mprobs\u001b[0m \u001b[0;34m=\u001b[0m \u001b[0magent_dem\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0mselect\u001b[0m\u001b[0;34m(\u001b[0m\u001b[0;34m[\u001b[0m\u001b[0ms_\u001b[0m\u001b[0;34m]\u001b[0m\u001b[0;34m,\u001b[0m \u001b[0;32mFalse\u001b[0m\u001b[0;34m)\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[1;32m     21\u001b[0m         \u001b[0ms\u001b[0m \u001b[0;34m=\u001b[0m \u001b[0ms_\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n",
+      "\u001b[0;32m~/anaconda3/lib/python3.6/site-packages/gym/wrappers/time_limit.py\u001b[0m in \u001b[0;36mstep\u001b[0;34m(self, action)\u001b[0m\n\u001b[1;32m     29\u001b[0m     \u001b[0;32mdef\u001b[0m \u001b[0mstep\u001b[0m\u001b[0;34m(\u001b[0m\u001b[0mself\u001b[0m\u001b[0;34m,\u001b[0m \u001b[0maction\u001b[0m\u001b[0;34m)\u001b[0m\u001b[0;34m:\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[1;32m     30\u001b[0m         \u001b[0;32massert\u001b[0m \u001b[0mself\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0m_episode_started_at\u001b[0m \u001b[0;32mis\u001b[0m \u001b[0;32mnot\u001b[0m \u001b[0;32mNone\u001b[0m\u001b[0;34m,\u001b[0m \u001b[0;34m\"Cannot call env.step() before calling reset()\"\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[0;32m---> 31\u001b[0;31m         \u001b[0mobservation\u001b[0m\u001b[0;34m,\u001b[0m \u001b[0mreward\u001b[0m\u001b[0;34m,\u001b[0m \u001b[0mdone\u001b[0m\u001b[0;34m,\u001b[0m \u001b[0minfo\u001b[0m \u001b[0;34m=\u001b[0m \u001b[0mself\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0menv\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0mstep\u001b[0m\u001b[0;34m(\u001b[0m\u001b[0maction\u001b[0m\u001b[0;34m)\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[0m\u001b[1;32m     32\u001b[0m         \u001b[0mself\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0m_elapsed_steps\u001b[0m \u001b[0;34m+=\u001b[0m \u001b[0;36m1\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[1;32m     33\u001b[0m \u001b[0;34m\u001b[0m\u001b[0m\n",
+      "\u001b[0;32m~/anaconda3/lib/python3.6/site-packages/gym/envs/box2d/lunar_lander.py\u001b[0m in \u001b[0;36mstep\u001b[0;34m(self, action)\u001b[0m\n\u001b[1;32m    295\u001b[0m             \u001b[0;34m-\u001b[0m \u001b[0;36m100\u001b[0m\u001b[0;34m*\u001b[0m\u001b[0mnp\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0msqrt\u001b[0m\u001b[0;34m(\u001b[0m\u001b[0mstate\u001b[0m\u001b[0;34m[\u001b[0m\u001b[0;36m0\u001b[0m\u001b[0;34m]\u001b[0m\u001b[0;34m*\u001b[0m\u001b[0mstate\u001b[0m\u001b[0;34m[\u001b[0m\u001b[0;36m0\u001b[0m\u001b[0;34m]\u001b[0m \u001b[0;34m+\u001b[0m \u001b[0mstate\u001b[0m\u001b[0;34m[\u001b[0m\u001b[0;36m1\u001b[0m\u001b[0;34m]\u001b[0m\u001b[0;34m*\u001b[0m\u001b[0mstate\u001b[0m\u001b[0;34m[\u001b[0m\u001b[0;36m1\u001b[0m\u001b[0;34m]\u001b[0m\u001b[0;34m)\u001b[0m\u001b[0;31m \u001b[0m\u001b[0;31m\\\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[1;32m    296\u001b[0m             \u001b[0;34m-\u001b[0m \u001b[0;36m100\u001b[0m\u001b[0;34m*\u001b[0m\u001b[0mnp\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0msqrt\u001b[0m\u001b[0;34m(\u001b[0m\u001b[0mstate\u001b[0m\u001b[0;34m[\u001b[0m\u001b[0;36m2\u001b[0m\u001b[0;34m]\u001b[0m\u001b[0;34m*\u001b[0m\u001b[0mstate\u001b[0m\u001b[0;34m[\u001b[0m\u001b[0;36m2\u001b[0m\u001b[0;34m]\u001b[0m \u001b[0;34m+\u001b[0m \u001b[0mstate\u001b[0m\u001b[0;34m[\u001b[0m\u001b[0;36m3\u001b[0m\u001b[0;34m]\u001b[0m\u001b[0;34m*\u001b[0m\u001b[0mstate\u001b[0m\u001b[0;34m[\u001b[0m\u001b[0;36m3\u001b[0m\u001b[0;34m]\u001b[0m\u001b[0;34m)\u001b[0m\u001b[0;31m \u001b[0m\u001b[0;31m\\\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[0;32m--> 297\u001b[0;31m             \u001b[0;34m-\u001b[0m \u001b[0;36m100\u001b[0m\u001b[0;34m*\u001b[0m\u001b[0mabs\u001b[0m\u001b[0;34m(\u001b[0m\u001b[0mstate\u001b[0m\u001b[0;34m[\u001b[0m\u001b[0;36m4\u001b[0m\u001b[0;34m]\u001b[0m\u001b[0;34m)\u001b[0m \u001b[0;34m+\u001b[0m \u001b[0;36m10\u001b[0m\u001b[0;34m*\u001b[0m\u001b[0mstate\u001b[0m\u001b[0;34m[\u001b[0m\u001b[0;36m6\u001b[0m\u001b[0;34m]\u001b[0m \u001b[0;34m+\u001b[0m \u001b[0;36m10\u001b[0m\u001b[0;34m*\u001b[0m\u001b[0mstate\u001b[0m\u001b[0;34m[\u001b[0m\u001b[0;36m7\u001b[0m\u001b[0;34m]\u001b[0m   \u001b[0;31m# And ten points for legs contact, the idea is if you\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[0m\u001b[1;32m    298\u001b[0m                                                               \u001b[0;31m# lose contact again after landing, you get negative reward\u001b[0m\u001b[0;34m\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[1;32m    299\u001b[0m         \u001b[0;32mif\u001b[0m \u001b[0mself\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0mprev_shaping\u001b[0m \u001b[0;32mis\u001b[0m \u001b[0;32mnot\u001b[0m \u001b[0;32mNone\u001b[0m\u001b[0;34m:\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n",
+      "\u001b[0;31mKeyboardInterrupt\u001b[0m: "
+     ]
+    }
+   ],
+   "source": [
+    "for i in range(10):\n",
+    "    run_eval_dem()"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 8,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "env.close()"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": []
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 9,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "#lunarlander\n",
+    "GAMMA = 0.99\n",
+    "LEARNING_RATES = [0.001, 0.02]\n",
+    "BETA = 0.00001\n",
+    "ACTOR_ARH = [128]\n",
+    "CRTIC_ARH = [128]"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 11,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "import math\n",
+    "\n",
+    "sig_dbg = []\n",
+    "mu_dbg = []\n",
+    "\n",
+    "class ActorACC(nn.Module):\n",
+    "    def __init__(self, inner_size=[64,64]):\n",
+    "        super(ActorACC,self).__init__()\n",
+    "        \n",
+    "        self.actoin_space = env.action_space.shape[0]\n",
+    "        self.action_min = env.action_space.low\n",
+    "        self.action_max = env.action_space.high\n",
+    "        self.observation_space = env.observation_space.shape[0]\n",
+    "        \n",
+    "        seq = []\n",
+    "        for i in range(len(inner_size)):\n",
+    "            if i == 0:\n",
+    "                seq += [nn.Linear(self.observation_space, inner_size[i])]\n",
+    "                seq += [nn.ReLU()]\n",
+    "            else:\n",
+    "                seq += [nn.Linear(inner_size[i-1], inner_size[i])]\n",
+    "            \n",
+    "            if i < len(inner_size)-1:\n",
+    "                seq += [nn.ReLU()]\n",
+    "        \n",
+    "        self.main = nn.Sequential(\n",
+    "            *seq\n",
+    "        )\n",
+    "        \n",
+    "        #self.main = nn.Linear( self.observation_space, 128 )\n",
+    "        \n",
+    "        self.mu_out = nn.Linear( inner_size[-1], self.actoin_space )\n",
+    "        self.sig_out = nn.Linear( inner_size[-1], self.actoin_space )\n",
+    "        \n",
+    "        self.init_w(self.mu_out)\n",
+    "        self.init_w(self.sig_out)\n",
+    "        \n",
+    "        self.main.apply(self.init_w)\n",
+    "    \n",
+    "        #self.train()\n",
+    "    \n",
+    "    def init_w(self, a):\n",
+    "        if isinstance(a, nn.Linear):\n",
+    "            torch.nn.init.xavier_uniform(a.weight)\n",
+    "        \n",
+    "    def forward(self, inp):\n",
+    "        x = self.main(inp)[0]\n",
+    "        mu = (self.mu_out(x))\n",
+    "        sig = F.softplus(self.sig_out(x)) + 1e-5\n",
+    "        \n",
+    "        return mu, sig\n",
+    "\n",
+    "class Critic(nn.Module):\n",
+    "    def __init__(self, inner_size):\n",
+    "        super(Critic,self).__init__()\n",
+    "        \n",
+    "        self.actoin_space = env.action_space.shape[0]\n",
+    "        self.observation_space = env.observation_space.shape[0]\n",
+    "        \n",
+    "        seq = []\n",
+    "        for i in range(len(inner_size)):\n",
+    "            if i == 0:\n",
+    "                seq += [nn.Linear(self.observation_space, inner_size[i])]\n",
+    "                seq += [nn.ReLU()]\n",
+    "            if i == len(inner_size)-1:\n",
+    "                seq += [nn.Linear(inner_size[i], 1)]\n",
+    "                #seq += [nn.Linear(inner_size[i], self.actoin_space)]\n",
+    "            else:\n",
+    "                seq += [nn.Linear(inner_size[i-1], inner_size[i])]\n",
+    "            \n",
+    "            if i < len(inner_size)-1:\n",
+    "                seq += [nn.ReLU()]\n",
+    "        \n",
+    "        self.main = nn.Sequential(\n",
+    "            *seq\n",
+    "        )\n",
+    "        \n",
+    "        self.main.apply(self.init_w)\n",
+    "    \n",
+    "    def init_w(self, a):\n",
+    "        if isinstance(a, nn.Linear):\n",
+    "            torch.nn.init.xavier_uniform(a.weight)\n",
+    "    \n",
+    "    def forward(self, inp):\n",
+    "        return self.main(inp)\n",
+    "\n",
+    "class ReplayBufferACC():\n",
+    "    def __init__(self, size = 100):\n",
+    "        \n",
+    "        self.size = size\n",
+    "        self.actoin_space = env.action_space.shape[0]\n",
+    "        self.observation_space = env.observation_space.shape[0]\n",
+    "        \n",
+    "        self.states = []\n",
+    "        self.probs = []\n",
+    "        self.rewards = []\n",
+    "        \n",
+    "        self.eps = torch.tensor(1e-8).to(device)\n",
+    "        \n",
+    "        #state_space_samples = np.array(\n",
+    "        #    [env.observation_space.sample() for x in range(10000)]\n",
+    "        #)\n",
+    "        #self.state_scaler = StandardScaler()\n",
+    "        #self.state_scaler.fit(state_space_samples)\n",
+    "        \n",
+    "        self.begin_episode()\n",
+    "        \n",
+    "    def begin_episode(self):\n",
+    "        self.actions = []\n",
+    "        self.states = []\n",
+    "        self.probs = []\n",
+    "        self.rewards = []\n",
+    "        self.entropy = []\n",
+    "        \n",
+    "    def add_obs(self, a, p, s, r, d, e):\n",
+    "        \n",
+    "        self.actions += [a]\n",
+    "        self.states += [self.scale_state(s)]\n",
+    "        self.probs += [p]\n",
+    "        self.rewards += [r]\n",
+    "        self.entropy += [e]\n",
+    "    \n",
+    "    def scale_state(self, st):\n",
+    "        return st\n",
+    "        #return self.state_scaler.transform(st)\n",
+    "    \n",
+    "    def sample_actor(self):\n",
+    "        \n",
+    "        probs = torch.cat(self.probs)\n",
+    "        entrs = torch.cat(self.entropy).to(device)\n",
+    "        \n",
+    "        return probs, entrs\n",
+    "    \n",
+    "    def sample_critic(self):\n",
+    "        \n",
+    "        states = np.concatenate(self.states).reshape(-1, self.observation_space)\n",
+    "        states = torch.tensor(states).to(device)\n",
+    "        actions = torch.tensor(self.actions).to(device)\n",
+    "        rewards = torch.tensor(self.rewards).to(device)\n",
+    "        next_states = torch.roll(states,-1)\n",
+    "        next_action_mask = torch.ones(len(self.rewards)).to(device)\n",
+    "        next_action_mask[-1] = 0.0\n",
+    "        \n",
+    "        returns = [np.dot( GAMMA**np.arange(1,len(self.rewards)-i+1), self.rewards[i:] ) for i in range(len(self.rewards))]\n",
+    "        returns = torch.tensor(returns).to(device)\n",
+    "        returns = (returns - returns.mean()) / (returns.std() + self.eps)\n",
+    "        \n",
+    "        return states, next_states, actions, rewards, next_action_mask, returns\n",
+    "\n",
+    "class AgentACC():\n",
+    "    def __init__(self, rb):\n",
+    "        \n",
+    "        self.policy_model = ActorACC(ACTOR_ARH).to(device)\n",
+    "        self.value_model = Critic(CRTIC_ARH).to(device)\n",
+    "        \n",
+    "        self.actoin_space = env.action_space.shape[0]\n",
+    "        self.action_min = torch.tensor(env.action_space.low).to(device)\n",
+    "        self.action_max = torch.tensor(env.action_space.high).to(device)\n",
+    "        \n",
+    "        self.replay = rb\n",
+    "        \n",
+    "        self.policy_opt = torch.optim.Adam(\n",
+    "            self.policy_model.parameters(), lr=LEARNING_RATES[0],\n",
+    "        )\n",
+    "        \n",
+    "        self.value_opt = torch.optim.Adam(\n",
+    "            self.value_model.parameters(), lr=LEARNING_RATES[1]\n",
+    "        )\n",
+    "    \n",
+    "    def train_critic(self, states, next_states, actions, rewards, next_state_masks, returns_r):\n",
+    "        \n",
+    "        loss = F.smooth_l1_loss(self.value_model(states.float()).view(-1), returns_r)\n",
+    "        \n",
+    "        self.value_opt.zero_grad()\n",
+    "        loss.backward()\n",
+    "        self.value_opt.step()\n",
+    "        \n",
+    "        return loss.item()\n",
+    "        \n",
+    "    def train_actor(self, log_probs, returns, entropy):\n",
+    "        \n",
+    "        returns_mul = torch.tensor(returns).view(-1).view(-1,1).repeat(1,log_probs.shape[1])\n",
+    "        \n",
+    "        #e_reg = 0*(-ENTROPY_A * torch.exp(log_probs)*log_probs).mean()\n",
+    "        e_reg = BETA*entropy.sum()\n",
+    "        loss = (-log_probs * returns_mul).sum() - e_reg\n",
+    "        \n",
+    "        #print(loss.item(), entropy.item())\n",
+    "        \n",
+    "        if loss != loss:\n",
+    "            print('Nans')\n",
+    "        \n",
+    "        self.policy_opt.zero_grad()\n",
+    "        loss.backward()\n",
+    "        self.policy_opt.step()\n",
+    "        \n",
+    "        return loss.item()\n",
+    "    \n",
+    "    def train_iter(self):\n",
+    "        \n",
+    "        log_probs, entropy = self.replay.sample_actor()\n",
+    "        states, next_states, actions, rewards, next_state_masks, returns_r = self.replay.sample_critic()\n",
+    "        \n",
+    "        returns_ac = returns_r - self.value_model(states.float()).detach().view(-1)\n",
+    "        \n",
+    "        actor_loss = self.train_actor(log_probs, returns_ac, entropy)\n",
+    "        \n",
+    "        critic_loss = self.train_critic(states, next_states, actions, rewards, next_state_masks, returns_r)\n",
+    "        \n",
+    "        return actor_loss, critic_loss\n",
+    "    \n",
+    "    def normal(self, x, mu, sigma, gpu_id, gpu=False):\n",
+    "        pi = np.array([3.14])\n",
+    "        pi = torch.from_numpy(pi).float()\n",
+    "        if gpu:\n",
+    "            with torch.cuda.device(gpu_id):\n",
+    "                pi = Variable(pi).cuda()\n",
+    "        else:\n",
+    "            pi = Variable(pi)\n",
+    "        a = (-1 * (x - mu).pow(2) / (2 * sigma)).exp()\n",
+    "        b = 1 / (2 * sigma * pi.expand_as(sigma)).sqrt()\n",
+    "        return a * b\n",
+    "    \n",
+    "    def select(self, state, explore=True):\n",
+    "        \n",
+    "        t_state = torch.tensor(state).float().unsqueeze(0).to(device)\n",
+    "        mu, sig = self.policy_model(t_state)\n",
+    "        act_distr = torch.distributions.Normal(mu.view(-1), sig.view(-1))\n",
+    "        \n",
+    "        if np.random.random() < 0.005:\n",
+    "            pass\n",
+    "            #print( sig.detach().cpu().numpy() )\n",
+    "        \n",
+    "        if not explore:\n",
+    "            act = mu\n",
+    "            log_probs = None\n",
+    "            entropy = None\n",
+    "            actc = act.detach().cpu().numpy().squeeze()\n",
+    "        else:\n",
+    "            act = act_distr.sample()\n",
+    "            act = torch.max(torch.min(act, self.action_max), self.action_min)\n",
+    "            log_probs = act_distr.log_prob(act).view(1,-1)\n",
+    "            actc = act.detach().cpu().numpy().squeeze()\n",
+    "            entropy = -0.5*( 1 + torch.log( 2*math.pi*sig*sig ) )\n",
+    "            \n",
+    "            global sig_dbg, mu_dbg\n",
+    "            sig_dbg += [ sig.detach().cpu().numpy().sum() ]\n",
+    "            mu_dbg += [ mu.detach().cpu().numpy().sum() ]\n",
+    "            \n",
+    "        return actc, log_probs, entropy\n",
+    "        "
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 12,
+   "metadata": {
+    "scrolled": true
+   },
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "\u001b[33mWARN: gym.spaces.Box autodetected dtype as <class 'numpy.float32'>. Please provide explicit dtype.\u001b[0m\n",
+      "\u001b[33mWARN: gym.spaces.Box autodetected dtype as <class 'numpy.float32'>. Please provide explicit dtype.\u001b[0m\n"
+     ]
+    },
+    {
+     "name": "stderr",
+     "output_type": "stream",
+     "text": [
+      "/Users/ivan/anaconda3/lib/python3.6/site-packages/ipykernel_launcher.py:44: UserWarning: nn.init.xavier_uniform is now deprecated in favor of nn.init.xavier_uniform_.\n",
+      "/Users/ivan/anaconda3/lib/python3.6/site-packages/ipykernel_launcher.py:82: UserWarning: nn.init.xavier_uniform is now deprecated in favor of nn.init.xavier_uniform_.\n"
+     ]
+    },
+    {
+     "data": {
+      "application/vnd.jupyter.widget-view+json": {
+       "model_id": "586d5e9776ad483781e263bd21400ed0",
+       "version_major": 2,
+       "version_minor": 0
+      },
+      "text/html": [
+       "<p>Failed to display Jupyter Widget of type <code>HBox</code>.</p>\n",
+       "<p>\n",
+       "  If you're reading this message in the Jupyter Notebook or JupyterLab Notebook, it may mean\n",
+       "  that the widgets JavaScript is still loading. If this message persists, it\n",
+       "  likely means that the widgets JavaScript library is either not installed or\n",
+       "  not enabled. See the <a href=\"https://ipywidgets.readthedocs.io/en/stable/user_install.html\">Jupyter\n",
+       "  Widgets Documentation</a> for setup instructions.\n",
+       "</p>\n",
+       "<p>\n",
+       "  If you're reading this message in another frontend (for example, a static\n",
+       "  rendering on GitHub or <a href=\"https://nbviewer.jupyter.org/\">NBViewer</a>),\n",
+       "  it may mean that your frontend doesn't currently support widgets.\n",
+       "</p>\n"
+      ],
+      "text/plain": [
+       "HBox(children=(IntProgress(value=0, max=2000), HTML(value='')))"
+      ]
+     },
+     "metadata": {},
+     "output_type": "display_data"
+    },
+    {
+     "name": "stderr",
+     "output_type": "stream",
+     "text": [
+      "/Users/ivan/anaconda3/lib/python3.6/site-packages/ipykernel_launcher.py:182: UserWarning: To copy construct from a tensor, it is recommended to use sourceTensor.clone().detach() or sourceTensor.clone().detach().requires_grad_(True), rather than torch.tensor(sourceTensor).\n"
+     ]
+    },
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "mu 0.29248044 sig 1.6166121\n",
+      "Episiode 9, episode reward -376.98, total reward -376.98, leng: 66 loss: (47.68479919433594, 0.3404461145401001)\n",
+      "mu -0.055100344 sig 1.3660834\n",
+      "\n"
+     ]
+    },
+    {
+     "ename": "KeyboardInterrupt",
+     "evalue": "",
+     "output_type": "error",
+     "traceback": [
+      "\u001b[0;31m---------------------------------------------------------------------------\u001b[0m",
+      "\u001b[0;31mKeyboardInterrupt\u001b[0m                         Traceback (most recent call last)",
+      "\u001b[0;32m<ipython-input-12-8c11430a5b01>\u001b[0m in \u001b[0;36m<module>\u001b[0;34m()\u001b[0m\n\u001b[1;32m     21\u001b[0m \u001b[0;34m\u001b[0m\u001b[0m\n\u001b[1;32m     22\u001b[0m     \u001b[0;32mfor\u001b[0m \u001b[0mt\u001b[0m \u001b[0;32min\u001b[0m \u001b[0mrange\u001b[0m\u001b[0;34m(\u001b[0m\u001b[0;36m2000\u001b[0m\u001b[0;34m)\u001b[0m\u001b[0;34m:\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[0;32m---> 23\u001b[0;31m         \u001b[0ms_\u001b[0m\u001b[0;34m,\u001b[0m \u001b[0mr\u001b[0m\u001b[0;34m,\u001b[0m \u001b[0mdone\u001b[0m\u001b[0;34m,\u001b[0m \u001b[0minfo\u001b[0m \u001b[0;34m=\u001b[0m \u001b[0menv\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0mstep\u001b[0m\u001b[0;34m(\u001b[0m\u001b[0ma\u001b[0m\u001b[0;34m)\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[0m\u001b[1;32m     24\u001b[0m \u001b[0;34m\u001b[0m\u001b[0m\n\u001b[1;32m     25\u001b[0m         \u001b[0mtotal_reward\u001b[0m \u001b[0;34m+=\u001b[0m \u001b[0mr\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n",
+      "\u001b[0;32m~/anaconda3/lib/python3.6/site-packages/gym/wrappers/time_limit.py\u001b[0m in \u001b[0;36mstep\u001b[0;34m(self, action)\u001b[0m\n\u001b[1;32m     29\u001b[0m     \u001b[0;32mdef\u001b[0m \u001b[0mstep\u001b[0m\u001b[0;34m(\u001b[0m\u001b[0mself\u001b[0m\u001b[0;34m,\u001b[0m \u001b[0maction\u001b[0m\u001b[0;34m)\u001b[0m\u001b[0;34m:\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[1;32m     30\u001b[0m         \u001b[0;32massert\u001b[0m \u001b[0mself\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0m_episode_started_at\u001b[0m \u001b[0;32mis\u001b[0m \u001b[0;32mnot\u001b[0m \u001b[0;32mNone\u001b[0m\u001b[0;34m,\u001b[0m \u001b[0;34m\"Cannot call env.step() before calling reset()\"\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[0;32m---> 31\u001b[0;31m         \u001b[0mobservation\u001b[0m\u001b[0;34m,\u001b[0m \u001b[0mreward\u001b[0m\u001b[0;34m,\u001b[0m \u001b[0mdone\u001b[0m\u001b[0;34m,\u001b[0m \u001b[0minfo\u001b[0m \u001b[0;34m=\u001b[0m \u001b[0mself\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0menv\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0mstep\u001b[0m\u001b[0;34m(\u001b[0m\u001b[0maction\u001b[0m\u001b[0;34m)\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[0m\u001b[1;32m     32\u001b[0m         \u001b[0mself\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0m_elapsed_steps\u001b[0m \u001b[0;34m+=\u001b[0m \u001b[0;36m1\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[1;32m     33\u001b[0m \u001b[0;34m\u001b[0m\u001b[0m\n",
+      "\u001b[0;32m~/anaconda3/lib/python3.6/site-packages/gym/envs/box2d/lunar_lander.py\u001b[0m in \u001b[0;36mstep\u001b[0;34m(self, action)\u001b[0m\n\u001b[1;32m    275\u001b[0m             \u001b[0mself\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0mlander\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0mApplyLinearImpulse\u001b[0m\u001b[0;34m(\u001b[0m \u001b[0;34m(\u001b[0m\u001b[0;34m-\u001b[0m\u001b[0mox\u001b[0m\u001b[0;34m*\u001b[0m\u001b[0mSIDE_ENGINE_POWER\u001b[0m\u001b[0;34m*\u001b[0m\u001b[0ms_power\u001b[0m\u001b[0;34m,\u001b[0m \u001b[0;34m-\u001b[0m\u001b[0moy\u001b[0m\u001b[0;34m*\u001b[0m\u001b[0mSIDE_ENGINE_POWER\u001b[0m\u001b[0;34m*\u001b[0m\u001b[0ms_power\u001b[0m\u001b[0;34m)\u001b[0m\u001b[0;34m,\u001b[0m \u001b[0mimpulse_pos\u001b[0m\u001b[0;34m,\u001b[0m \u001b[0;32mTrue\u001b[0m\u001b[0;34m)\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[1;32m    276\u001b[0m \u001b[0;34m\u001b[0m\u001b[0m\n\u001b[0;32m--> 277\u001b[0;31m         \u001b[0mself\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0mworld\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0mStep\u001b[0m\u001b[0;34m(\u001b[0m\u001b[0;36m1.0\u001b[0m\u001b[0;34m/\u001b[0m\u001b[0mFPS\u001b[0m\u001b[0;34m,\u001b[0m \u001b[0;36m6\u001b[0m\u001b[0;34m*\u001b[0m\u001b[0;36m30\u001b[0m\u001b[0;34m,\u001b[0m \u001b[0;36m2\u001b[0m\u001b[0;34m*\u001b[0m\u001b[0;36m30\u001b[0m\u001b[0;34m)\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[0m\u001b[1;32m    278\u001b[0m \u001b[0;34m\u001b[0m\u001b[0m\n\u001b[1;32m    279\u001b[0m         \u001b[0mpos\u001b[0m \u001b[0;34m=\u001b[0m \u001b[0mself\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0mlander\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0mposition\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n",
+      "\u001b[0;32m~/anaconda3/lib/python3.6/site-packages/gym/envs/box2d/lunar_lander.py\u001b[0m in \u001b[0;36mBeginContact\u001b[0;34m(self, contact)\u001b[0m\n\u001b[1;32m     60\u001b[0m         \u001b[0mcontactListener\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0m__init__\u001b[0m\u001b[0;34m(\u001b[0m\u001b[0mself\u001b[0m\u001b[0;34m)\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[1;32m     61\u001b[0m         \u001b[0mself\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0menv\u001b[0m \u001b[0;34m=\u001b[0m \u001b[0menv\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[0;32m---> 62\u001b[0;31m     \u001b[0;32mdef\u001b[0m \u001b[0mBeginContact\u001b[0m\u001b[0;34m(\u001b[0m\u001b[0mself\u001b[0m\u001b[0;34m,\u001b[0m \u001b[0mcontact\u001b[0m\u001b[0;34m)\u001b[0m\u001b[0;34m:\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[0m\u001b[1;32m     63\u001b[0m         \u001b[0;32mif\u001b[0m \u001b[0mself\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0menv\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0mlander\u001b[0m\u001b[0;34m==\u001b[0m\u001b[0mcontact\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0mfixtureA\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0mbody\u001b[0m \u001b[0;32mor\u001b[0m \u001b[0mself\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0menv\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0mlander\u001b[0m\u001b[0;34m==\u001b[0m\u001b[0mcontact\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0mfixtureB\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0mbody\u001b[0m\u001b[0;34m:\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[1;32m     64\u001b[0m             \u001b[0mself\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0menv\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0mgame_over\u001b[0m \u001b[0;34m=\u001b[0m \u001b[0;32mTrue\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n",
+      "\u001b[0;31mKeyboardInterrupt\u001b[0m: "
+     ]
+    }
+   ],
+   "source": [
+    "env = gym.make('LunarLanderContinuous-v2')\n",
+    "#env = gym.make('BipedalWalker-v2')\n",
+    "env.seed(42)\n",
+    "torch.manual_seed(42)\n",
+    "\n",
+    "buffer = ReplayBufferACC()\n",
+    "agent = AgentACC(buffer)\n",
+    "\n",
+    "total_rewards = []\n",
+    "total_lengths = []\n",
+    "\n",
+    "for e in tqdm(range(2000)):\n",
+    "    \n",
+    "    buffer.begin_episode()\n",
+    "    \n",
+    "    s = env.reset()\n",
+    "    a, probs, entr = agent.select([s])\n",
+    "    \n",
+    "    total_reward = 0\n",
+    "    total_length= 0\n",
+    "    \n",
+    "    for t in range(2000):\n",
+    "        s_, r, done, info = env.step(a)\n",
+    "\n",
+    "        total_reward += r\n",
+    "        total_length += 1\n",
+    "\n",
+    "        buffer.add_obs( a, probs, s, r, done, entr )\n",
+    "\n",
+    "        a, probs, entr = agent.select([s_])\n",
+    "\n",
+    "        s = s_\n",
+    "\n",
+    "        if done:\n",
+    "\n",
+    "            total_rewards += [total_reward]\n",
+    "            total_lengths += [total_length]\n",
+    "            \n",
+    "            loss = agent.train_iter()\n",
+    "            if e % 10 == 9:\n",
+    "                print(f'Episiode {e}, episode reward {np.round(np.mean(total_rewards[-10:]),2)}, total reward {np.round(np.mean(total_rewards),2)}, leng: {total_length} loss: {loss}')\n",
+    "            \n",
+    "            if e % 10 == 3:\n",
+    "                print('mu', np.mean(mu_dbg[-10:]), 'sig', np.mean(sig_dbg[-10:]))\n",
+    "            \n",
+    "            #if e == 1500: run_eval()\n",
+    "\n",
+    "            break"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 595,
+   "metadata": {},
+   "outputs": [
+    {
+     "data": {
+      "text/plain": [
+       "[<matplotlib.lines.Line2D at 0x7f5cb4185a90>]"
+      ]
+     },
+     "execution_count": 595,
+     "metadata": {},
+     "output_type": "execute_result"
+    },
+    {
+     "data": {
+      "image/png": "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\n",
+      "text/plain": [
+       "<Figure size 432x288 with 1 Axes>"
+      ]
+     },
+     "metadata": {
+      "needs_background": "light"
+     },
+     "output_type": "display_data"
+    }
+   ],
+   "source": [
+    "plt.plot(ma(total_rewards,50))"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 601,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "torch.save(agent.policy_model.state_dict(), './ACC_snap/actor.pt')\n",
+    "torch.save(agent.value_model.state_dict(), './ACC_snap/critic.pt')"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": []
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "### Демонстрация"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 13,
+   "metadata": {},
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "\u001b[33mWARN: gym.spaces.Box autodetected dtype as <class 'numpy.float32'>. Please provide explicit dtype.\u001b[0m\n",
+      "\u001b[33mWARN: gym.spaces.Box autodetected dtype as <class 'numpy.float32'>. Please provide explicit dtype.\u001b[0m\n"
+     ]
+    },
+    {
+     "name": "stderr",
+     "output_type": "stream",
+     "text": [
+      "/Users/ivan/anaconda3/lib/python3.6/site-packages/ipykernel_launcher.py:44: UserWarning: nn.init.xavier_uniform is now deprecated in favor of nn.init.xavier_uniform_.\n",
+      "/Users/ivan/anaconda3/lib/python3.6/site-packages/ipykernel_launcher.py:82: UserWarning: nn.init.xavier_uniform is now deprecated in favor of nn.init.xavier_uniform_.\n"
+     ]
+    }
+   ],
+   "source": [
+    "env = gym.make('LunarLanderContinuous-v2')\n",
+    "env.seed(42)\n",
+    "torch.manual_seed(42)\n",
+    "\n",
+    "buffer_dem = ReplayBufferACC()\n",
+    "agent_dem = AgentACC(buffer_dem)\n",
+    "\n",
+    "agent_dem.policy_model.load_state_dict( torch.load('./ACC_snap/actor.pt', map_location=device) )\n",
+    "agent_dem.value_model.load_state_dict( torch.load('./ACC_snap/critic.pt', map_location=device) )\n",
+    "\n",
+    "def run_eval_dem():\n",
+    "    \n",
+    "    print('Eval')\n",
+    "    \n",
+    "    s = env.reset()\n",
+    "    a, probs, entr = agent_dem.select(s, False)\n",
+    "    \n",
+    "    for t in range(2000):\n",
+    "        \n",
+    "        s_, r, done, info = env.step(np.clip(a, -np.ones_like(a),np.ones_like(a)))\n",
+    "        a, probs, entr = agent_dem.select(s_, False)\n",
+    "        s = s_\n",
+    "\n",
+    "        env.render()\n",
+    "\n",
+    "        if done:\n",
+    "            #env.reset()\n",
+    "            break\n",
+    "    \n",
+    "    env.close()"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 14,
+   "metadata": {
+    "scrolled": true
+   },
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "Eval\n",
+      "Eval\n",
+      "Eval\n",
+      "Eval\n",
+      "Eval\n",
+      "Eval\n",
+      "Eval\n",
+      "Eval\n",
+      "Eval\n",
+      "Eval\n"
+     ]
+    }
+   ],
+   "source": [
+    "for i in range(10):\n",
+    "    run_eval_dem()"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": []
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": []
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": []
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "# Домашнее задание\n",
+    "\n",
+    "    1. Найти оптимальный baseline(из лекции) - 1 балл\n",
+    "\n",
+    "    2. Для A2C заменть Монте-Карло обучение на TD обучение. Сравнить результат(графики ревордов). 2 балла\n",
+    "    \n",
+    "    3. Для A2C с неприрывными действиями решить задачу RacingCar-v0. Нужно набрать более 900 в среднем за 50 последних эпизодов - 3 балла"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": []
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": []
+  }
+ ],
+ "metadata": {
+  "kernelspec": {
+   "display_name": "Python 3",
+   "language": "python",
+   "name": "python3"
+  },
+  "language_info": {
+   "codemirror_mode": {
+    "name": "ipython",
+    "version": 3
+   },
+   "file_extension": ".py",
+   "mimetype": "text/x-python",
+   "name": "python",
+   "nbconvert_exporter": "python",
+   "pygments_lexer": "ipython3",
+   "version": "3.6.4"
+  }
+ },
+ "nbformat": 4,
+ "nbformat_minor": 2
+}
